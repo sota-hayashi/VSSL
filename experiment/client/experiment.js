@@ -1,5 +1,5 @@
 // 実験の流れ（docs/specs/requirements.md）．
-// 開始 → 全画面・表示領域の確認・画面の書き換え間隔の測定 → 教示 → 練習（合格まで）→ 本番 6 ブロック → 気づきの質問 → データの送信．
+// 同意 → 開始 → 全画面・表示領域の確認・画面の書き換え間隔の測定 → 教示 → 練習（合格まで）→ 本番 6 ブロック → 気づきの質問 → データの送信．
 (function (root) {
   'use strict';
 
@@ -45,6 +45,7 @@
       stateOrientations: null,
       blockStarts: null,
       practiceRounds: 0,
+      consent: null,
     },
     events: [],
     trials: [],
@@ -314,6 +315,101 @@
 
   // ---------- 各段階 ----------
 
+  // 同意の確認の項目（1 つ）．チェックしたときだけ「同意する」を押せる．
+  const CONSENT_ITEMS = [
+    { id: 'consent', text: 'I have read and understood the information above, I am at least 18 years old, and I agree to take part in this study.' },
+  ];
+
+  function escapeHTML(text) {
+    return String(text).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  function consentInfoMissing() {
+    return Object.values(C.consentInfo).some((v) => /\[.*\]/.test(String(v)));
+  }
+
+  // 同意のページ（実験の前．全画面にする前）．同意すれば true，同意しなければ false を返す．
+  async function consent() {
+    current.phase = 'consent';
+    const info = {};
+    Object.keys(C.consentInfo).forEach((k) => { info[k] = escapeHTML(C.consentInfo[k]); });
+    const items = CONSENT_ITEMS.map((it) =>
+      `<label class="check"><input type="checkbox" name="consent" value="${it.id}"> ${it.text}</label>`).join('');
+    showHTML(`
+      <div class="box wide">
+        <h1>Information and consent</h1>
+        <p>Please read the following information before deciding whether to take part.</p>
+        <h3>Purpose of the study</h3>
+        <p>This study investigates how people search for a target among other shapes.
+           It is conducted by ${info.researcher} (${info.institution}).</p>
+        <h3>What you will do</h3>
+        <p>You will look at displays of eight shapes and decide, as quickly and accurately as possible,
+           whether a T is present among L shapes, by pressing one of two keys.
+           There is a short practice block, the main task (6 blocks with breaks), and a few questions at the end.
+           The study takes ${info.duration} and runs in full screen.
+           You need a computer with a physical keyboard, and sound should be turned on.</p>
+        <h3>Voluntary participation and withdrawal</h3>
+        <p>Taking part is voluntary. You can stop at any time without giving a reason by closing this page.
+           Your data are sent to the researcher only when you reach the end of the study;
+           if you stop earlier, no data are saved.
+           If you want your data to be deleted after completing the study, please contact the researcher
+           (${info.contact}) with your Prolific ID.</p>
+        <h3>Risks and benefits</h3>
+        <p>There are no known risks beyond those of ordinary computer use, such as mild eye strain or fatigue.
+           There is no direct benefit to you other than the payment.</p>
+        <h3>Data and privacy</h3>
+        <p>We record your key presses and response times, your answers to the questions at the end,
+           your Prolific ID, and technical information about your browser and screen
+           (browser type, screen size, display refresh rate).
+           We do not collect your name or any other information that directly identifies you.
+           Your Prolific ID is used only to manage payment and to identify your data if you ask for it to be deleted;
+           it will be removed before the data are analysed or shared.
+           The data are stored on a secure university server and kept for ${info.retention}.
+           Anonymised data may be published and shared with other researchers.
+           This study has been approved by ${info.ethics}.</p>
+        <h3>Payment</h3>
+        <p>You will receive ${info.payment}. Payments are made via Prolific.</p>
+        <h3>Contact</h3>
+        <p>If you have any questions, please contact ${info.contact}.</p>
+        <h3>Consent</h3>
+        <div class="checks">${items}</div>
+        <div class="consent-buttons">
+          <button id="agree" disabled>I agree to take part</button>
+          <button id="decline">I do not agree</button>
+        </div>
+      </div>`);
+    const boxes = Array.from(document.querySelectorAll('input[name="consent"]'));
+    const agree = document.getElementById('agree');
+    boxes.forEach((b) => b.addEventListener('change', () => { agree.disabled = !boxes.every((x) => x.checked); }));
+    const choice = await new Promise((resolve) => {
+      agree.addEventListener('click', () => resolve(true), { once: true });
+      document.getElementById('decline').addEventListener('click', () => resolve(false), { once: true });
+    });
+    data.meta.consent = {
+      agreed: choice,
+      time: new Date().toISOString(),
+      items: choice ? CONSENT_ITEMS.map((it) => it.id) : boxes.filter((b) => b.checked).map((b) => b.value),
+    };
+    logEvent(choice ? 'consent_agreed' : 'consent_declined');
+    return choice;
+  }
+
+  // 同意しなかったとき：データは送らず，完了の URL も出さない．Prolific の「No consent」の経路へ戻す．
+  function declined() {
+    running = false;
+    data.meta.status = 'no_consent';
+    const back = C.noConsentUrl
+      ? `<p>You will now be returned to Prolific. If nothing happens, <a href="${C.noConsentUrl}">click here</a>.</p>`
+      : '';
+    showHTML(`
+      <div class="box">
+        <p>You have chosen not to take part in this study. Thank you for your time.</p>
+        <p>Please return your submission on Prolific by clicking <b>"Stop without completing"</b>.</p>
+        ${back}
+      </div>`);
+    if (C.noConsentUrl) setTimeout(() => { root.location.href = C.noConsentUrl; }, 3000);
+  }
+
   async function welcome() {
     showHTML(`
       <div class="box wide">
@@ -340,7 +436,7 @@
         <div class="box">
           <p>Unfortunately, your screen is too small for this experiment
              (at least ${C.minDisplay} × ${C.minDisplay} pixels are needed in full screen).</p>
-          <p>Please return the study on Prolific.</p>
+          <p>Please return your submission on Prolific by clicking <b>"Stop without completing"</b>.</p>
         </div>`);
       return false;
     }
@@ -621,9 +717,15 @@
     if (data.meta.status === 'started') data.meta.status = 'completed';
     showHTML('<div class="box"><p>Saving data… Please do not close this page.</p></div>');
     const ok = await send();
-    const link = C.completionUrl ? `<p><a href="${C.completionUrl}">Click here to return to Prolific</a></p>` : '';
+    // 完了の URL は，最後まで終えた参加者にだけ出す（画面が小さくて始められなかった参加者などには出さない）
+    const completed = data.meta.status === 'completed';
+    const link = completed && C.completionUrl ? `<p><a href="${C.completionUrl}">Click here to return to Prolific</a></p>` : '';
+    const thanks = completed
+      ? 'Thank you for participating. The data were saved.'
+      : `${data.meta.status === 'display_too_small' ? 'Unfortunately, your screen is too small for this experiment. ' : ''}`
+        + 'Please return your submission on Prolific by clicking <b>"Stop without completing"</b>.';
     if (ok) {
-      showHTML(`<div class="box"><p>Thank you for participating. The data were saved.</p>${link}</div>`);
+      showHTML(`<div class="box"><p>${thanks}</p>${link}</div>`);
     } else {
       showHTML(`
         <div class="box">
@@ -637,7 +739,7 @@
       const retry = document.getElementById('retry');
       if (retry) {
         retry.addEventListener('click', async () => {
-          if (await send()) showHTML(`<div class="box"><p>Thank you for participating. The data were saved.</p>${link}</div>`);
+          if (await send()) showHTML(`<div class="box"><p>${thanks}</p>${link}</div>`);
         });
       }
     }
@@ -658,6 +760,16 @@
         </div>`);
       return;
     }
+    // 研究の情報が埋まっていなければ始めない（動作確認の debug を除く）
+    if (consentInfoMissing() && !C.debug) {
+      showHTML(`
+        <div class="box">
+          <p>This study is not ready yet.</p>
+          <p>Please return your submission on Prolific by clicking <b>"Stop without completing"</b>.</p>
+        </div>`);
+      return;
+    }
+    if (!(await consent())) { declined(); return; }
     if (!(await welcome())) { await finish(); return; }
     running = true;
     await instructions();

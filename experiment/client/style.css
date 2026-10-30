@@ -98,3 +98,32 @@ figure {
   text-align: center;
   margin-top: 4px;
 }
+
+.box h3 {
+  font-size: 18px;
+  margin: 16px 0 4px;
+}
+
+.checks {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.check {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.check input {
+  margin-top: 5px;
+}
+
+.consent-buttons {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}

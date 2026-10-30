@@ -7,7 +7,7 @@
   const debug = params.get('debug') === '1';
 
   root.VSSLConfig = {
-    version: '0.4.0',
+    version: '0.4.1',
     debug,
 
     // A．試行数とブロック
@@ -46,7 +46,21 @@
     // J．データの送り先とProlific
     // 大学のサーバで受け取る URL（index.html からの相対パス）．空のときは送らず，ファイルを保存させる．
     saveUrl: 'server/upload.php',
-    // Prolific の完了 URL（例：https://app.prolific.com/submissions/complete?cc=XXXX）．空のときはリンクを出さない．
-    completionUrl: 'https://app.prolific.com/submissions/complete?cc=CI676Z0V',
+    // Prolific の完了 URL（Completion paths の完了の経路）．最後まで終えた参加者にだけ出す．空のときはリンクを出さない．
+    completionUrl: 'https://app.prolific.com/submissions/complete?cc=C14VWVFT',
+    // 同意しなかった参加者を戻す URL（Completion paths の「No consent」→「Request a return」の経路．完了の URL とは別のもの）．
+    // 空のときは，Prolific で「Stop without completing」を押して返すよう案内するだけにする．
+    noConsentUrl: 'https://app.prolific.com/submissions/complete?cc=CZJGETA8',
+
+    // 同意のページに出す研究の情報．[ ] のものは研究者が埋める（[ ] が残っていると，debug でないときは始めない）
+    consentInfo: {
+      researcher: 'Sota Hayashi',
+      institution: 'Graduate School of Engineering, The University of Osaka',
+      contact: 's.hayashi@sip.comm.eng.osaka-u.ac.jp',
+      duration: 'just under 30 minutes',
+      payment: '£3 for taking part, plus a £1 bonus if you complete the whole experiment',
+      ethics: 'the Committee for Human Research at the Graduate School of Engineering, The University of Osaka (approval number: 5-7-1)',
+      retention: 'one year',
+    },
   };
 })(typeof window !== 'undefined' ? window : globalThis);

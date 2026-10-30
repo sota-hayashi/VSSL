@@ -1,0 +1,6 @@
+STATUS.md
+log.md
+data/
+docs/
+.venv/
+.DS_Store

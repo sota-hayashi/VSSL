@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 
 from . import settings
-from .tables import successor_map
+from .tables import design_of, successor_map
 
 OK, WARN, FAIL = "ok", "warn", "fail"
 
@@ -42,6 +42,49 @@ def sequence_counts(main, cycle):
     return out
 
 
+MARKOV_LABELS = {("hp", "hp"): "regular", ("lp", "hp"): "lpToHp", ("n", "hp"): "nToHp", ("hp", "lp"): "hpToLp",
+                 ("hp", "n"): "hpToN", ("lp", "lp"): "lpToLp", ("lp", "n"): "lpToN", ("n", "lp"): "nToLp"}
+
+
+def state_class(state):
+    return state[:2].lower() if state != "N" else "n"
+
+
+def markov_sequence_counts(main, meta):
+    """markov：画面の中身（T の有無と向き）から状態を数え直し，記録されたラベルと生成の条件を確かめる
+    （markov_stimuli.md §8）．"""
+    orientation_state = {o: st for st, o in meta["stateOrientations"].items()}
+    states = [orientation_state[t["orientation"]] if t["present"] else "N" for _, t in main.iterrows()]
+    out = {"label_mismatch": 0, "same_state": 0, "same_position": 0, "block_count_mismatch": 0,
+           "transition_mismatch": 0}
+    idx = {st: i for i, st in enumerate(settings.MARKOV_STATES)}
+    prev, prev_t, prev_pos = None, None, None
+    for (_, t), st in zip(main.iterrows(), states):
+        expected = "first" if prev is None else MARKOV_LABELS[(state_class(prev), state_class(st))]
+        if (t["state"] != st or t["prevState"] != prev or t["transition"] != expected
+                or t["afterAbsent"] != (prev == "N") or t["prevOrientation"] != (prev_t if t["present"] else None)):
+            out["label_mismatch"] += 1
+        if st == prev:
+            out["same_state"] += 1
+        if t["present"]:
+            if prev_pos is not None and t["targetPos"] == prev_pos:
+                out["same_position"] += 1
+            prev_t, prev_pos = t["orientation"], t["targetPos"]
+        prev = st
+    # 各ブロックの状態の回数
+    for b, g in main.assign(st=states).groupby("block"):
+        counts = g["st"].value_counts()
+        out["block_count_mismatch"] += sum(int(counts.get(st, 0) != n)
+                                           for st, n in zip(settings.MARKOV_STATES, settings.MARKOV_COUNTS))
+    # 遷移の回数：最後から最初へ戻る 1 本を足すと C と一致する（6 ブロックすべてあるときだけ）
+    if len(states) == sum(settings.MARKOV_COUNTS) * 6:
+        T = np.zeros((5, 5), int)
+        for a, c in zip(states, states[1:] + states[:1]):
+            T[idx[a], idx[c]] += 1
+        out["transition_mismatch"] = int(np.abs(T - np.array(settings.MARKOV_C)).sum())
+    return out
+
+
 def check_participant(d, trials, p_row):
     """1 人分の判定（項目ごとの値と判定）．"""
     meta = d["meta"]
@@ -56,14 +99,14 @@ def check_participant(d, trials, p_row):
     break_events = [e for e in d["events"] if e.get("trial") is None and e.get("phase") in ("practice", "main")]
     away_types = ("fullscreen_exit", "visibility_hidden", "window_blur")
     away_trials = int((main["focusLost"] | ~main["fullscreen"]).sum())
-    seq = sequence_counts(main, meta["cycle"])
+    seq = markov_sequence_counts(main, meta) if design_of(meta) == "markov" else sequence_counts(main, meta["cycle"])
     seq_bad = sum(seq.values())
     expected_n = settings.TARGETS[settings.TARGET]["main_trials"]
 
     row = {
         "subject": sid,
         "version": meta.get("version"),
-        "design": meta.get("design") or "mixed",
+        "design": design_of(meta),
         "status": meta.get("status"),
         "debug": meta.get("debug"),
         "n_main": len(main),

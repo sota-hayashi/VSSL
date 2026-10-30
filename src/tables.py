@@ -19,22 +19,49 @@ def design_of(meta):
     return meta.get("design") or "mixed"
 
 
+def markov_successor_map(state_orientations):
+    """markov：HP の向きには相手の HP の向きを，LP の向きには None（決まった正答がない）を返す．"""
+    so = state_orientations
+    return {so["HP1"]: so["HP2"], so["HP2"]: so["HP1"], so["LP1"]: None, so["LP2"]: None}
+
+
 def awareness_summary(d):
-    """気づきの質問の答え．質問 2 は，見せた向きの次の向き（循環どおり）を選べば正答．"""
-    succ = successor_map(d["meta"]["cycle"])
+    """気づきの質問の答え．質問 2 は，見せた向きの次の向きを選べば正答．
+    mixed・alternating では循環どおりの次の向き．markov では HP を見せたときだけ相手の HP が正答で，
+    LP を見せたときは正答を置かず，確信度だけを数える（analysis.md「気づき」）．"""
+    meta = d["meta"]
+    markov = design_of(meta) == "markov"
+    succ = markov_successor_map(meta["stateOrientations"]) if markov else successor_map(meta["cycle"])
     out = {"noticed": None, "noticed_conf": np.nan, "q2_correct": 0, "q2_n": 0, "q2_mean_conf": np.nan}
-    confs = []
+    if markov:
+        out.update(q2_lp_n=0, q2_lp_mean_conf=np.nan)
+    confs, lp_confs = [], []
     for a in d.get("awareness", []):
         if a["question"] == "noticed":
             out["noticed"] = a["answer"]
             out["noticed_conf"] = a["confidence"]
         elif a["question"] == "next_orientation":
+            if succ[a["shown"]] is None:  # markov の LP
+                out["q2_lp_n"] += 1
+                lp_confs.append(a["confidence"])
+                continue
             out["q2_n"] += 1
             out["q2_correct"] += int(a["answer"] == succ[a["shown"]])
             confs.append(a["confidence"])
     if confs:
         out["q2_mean_conf"] = float(np.mean(confs))
+    if lp_confs:
+        out["q2_lp_mean_conf"] = float(np.mean(lp_confs))
     return out
+
+
+def design_info(meta):
+    """参加者ごとの設計の情報．mixed・alternating は循環，markov は HP ペア．"""
+    info = {"design": design_of(meta), "cycle": meta.get("cycle")}
+    if info["design"] == "markov":
+        info["hp_pair"] = ",".join(meta["hpPair"])
+        info["hp_pair_type"] = meta["hpPairType"]
+    return info
 
 
 def trial_table(data):
@@ -47,8 +74,7 @@ def trial_table(data):
             df["blockType"] = None
         df.loc[(df["phase"] == "main") & df["blockType"].isna(), "blockType"] = "mixed"
         df["block"] = df["block"].astype("Int64")  # 練習は空
-        info = {"subject": meta["subjectId"], "version": meta["version"], "design": design_of(meta),
-                "cycle": meta["cycle"]}
+        info = {"subject": meta["subjectId"], "version": meta["version"], **design_info(meta)}
         info.update(awareness_summary(d))
         for k, v in reversed(list(info.items())):
             df.insert(0, k, v)
@@ -91,8 +117,8 @@ def participant_metrics(trials):
 def participant_table(data, trials):
     """参加者の表．成績，気づきの答え，除外の印と理由．"""
     metrics = participant_metrics(trials)
-    info = pd.DataFrame([dict(subject=d["meta"]["subjectId"], design=design_of(d["meta"]),
-                              cycle=d["meta"]["cycle"], practice_rounds=d["meta"].get("practiceRounds"),
+    info = pd.DataFrame([dict(subject=d["meta"]["subjectId"], **design_info(d["meta"]),
+                              practice_rounds=d["meta"].get("practiceRounds"),
                               **awareness_summary(d)) for d in data])
     p = info.merge(metrics, on="subject", how="left")
 

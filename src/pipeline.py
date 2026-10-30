@@ -1,19 +1,20 @@
 """生データから表と図をすべて作り直す．
 
-実行：.venv/bin/python -m src.pipeline
+実行：.venv/bin/python -m src.pipeline [--target pilot|main]
 """
 import argparse
 from pathlib import Path
 
-from . import check, load, pilot, settings, tables
+from . import check, load, markov, pilot, settings, tables
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--raw", type=Path, default=settings.RAW_DIR, help="生データのフォルダ")
     parser.add_argument("--out", type=Path, default=settings.DERIVED_DIR, help="出力のフォルダ")
+    parser.add_argument("--target", choices=list(settings.TARGETS), default=settings.TARGET, help="対象")
     args = parser.parse_args()
-    target = settings.TARGET
+    target = settings.TARGET = args.target
     out = args.out / target
     out.mkdir(parents=True, exist_ok=True)
 
@@ -40,11 +41,24 @@ def main():
         if flagged:
             print(f"[check] {row['subject']}: {', '.join(flagged)}")
 
-    # 5. 解析
-    if target == "pilot":
+    # 5. 解析（設計ごと）
+    designs = set(participants["design"])
+    fmt = lambda x: f"{x:.3f}"
+    if designs == {"markov"}:
+        results = markov.run(trials, participants, out / "markov")
+        for measure in ("rt", "acc"):
+            _, _, summary, anova = results[measure]
+            print(f"[markov {measure}] a − b per participant")
+            print(summary.drop(columns=["a", "b"]).to_string(index=False, float_format=fmt))
+            if len(anova):
+                print(anova[["comparison", "effect", "n", "df1", "df2", "F", "eps_gg", "p_gg", "eta_p2"]]
+                      .to_string(index=False, float_format=fmt))
+    elif designs == {"alternating"}:
         _, summary = pilot.run(trials, participants, out / "pilot")
         print("[pilot]")
-        print(summary.to_string(index=False, float_format=lambda x: f"{x:.3f}"))
+        print(summary.to_string(index=False, float_format=fmt))
+    else:
+        print(f"設計が混ざっているか，解析が用意されていない設計です：{sorted(designs)}")
 
 
 if __name__ == "__main__":

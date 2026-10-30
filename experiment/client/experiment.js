@@ -1,5 +1,5 @@
 // 実験の流れ（docs/specs/requirements.md）．
-// 開始 → 全画面・表示領域の確認・画面の書き換え間隔の測定 → 教示 → 練習（合格まで）→ 本番 8 ブロック → 気づきの質問 → データの送信．
+// 開始 → 全画面・表示領域の確認・画面の書き換え間隔の測定 → 教示 → 練習（合格まで）→ 本番 6 ブロック → 気づきの質問 → データの送信．
 (function (root) {
   'use strict';
 
@@ -40,6 +40,10 @@
       cycleIndex: null,
       cycle: null,
       startOrientation: null,
+      hpPair: null,
+      hpPairType: null,
+      stateOrientations: null,
+      blockStarts: null,
       practiceRounds: 0,
     },
     events: [],
@@ -272,6 +276,8 @@
       afterAbsent: trial.afterAbsent,
       targetPos: trial.targetPos,
       prevTargetPos: trial.prevTargetPos,
+      state: trial.state || null,
+      prevState: trial.prevState || null,
       items: itemsString(trial.items),
       response: answer,
       key: response.key,
@@ -422,16 +428,25 @@
 
   async function mainBlocks() {
     current.phase = 'main';
-    const cycleIndex = Math.floor(rng() * S.CYCLES.length);
-    const seq = S.generateMain(rng, { nBlocks: C.nMainBlocks, cycleIndex, design: C.design });
-    data.meta.design = seq.design;
-    data.meta.cycleIndex = cycleIndex;
-    data.meta.cycle = seq.cycle.map((o) => S.ORIENTATION_SYMBOL[o]).join('');
-    data.meta.startOrientation = seq.start;
+    data.meta.design = C.design;
+    let seq;
+    if (C.design === 'markov') {
+      seq = S.generateMain(rng, { nBlocks: C.nMainBlocks, design: C.design });
+      data.meta.hpPair = seq.hpPair;
+      data.meta.hpPairType = seq.hpPairType;
+      data.meta.stateOrientations = seq.stateOrientations;
+      data.meta.blockStarts = seq.blockStarts;
+    } else {
+      const cycleIndex = Math.floor(rng() * S.CYCLES.length);
+      seq = S.generateMain(rng, { nBlocks: C.nMainBlocks, cycleIndex, design: C.design });
+      data.meta.cycleIndex = cycleIndex;
+      data.meta.cycle = seq.cycle.map((o) => S.ORIENTATION_SYMBOL[o]).join('');
+      data.meta.startOrientation = seq.start;
+    }
 
     showHTML(`
       <div class="box">
-        <p>The main experiment consists of ${C.nMainBlocks} blocks.
+        <p>The main experiment consists of ${seq.blocks.length} blocks.
            After each block, you can take a short break.</p>
         <p>Remember: <b>L</b> = T present, <b>A</b> = T absent.</p>
         <p>Press the space bar to start.</p>
@@ -452,15 +467,15 @@
       const s = summarize(recs);
       data.blockSummary.push(Object.assign({ block: b.block, blockType: b.blockType }, s));
       const last = b.block === seq.blocks.length;
-      await blockBreak(b.block, s, last);
+      await blockBreak(b.block, seq.blocks.length, s, last);
     }
   }
 
-  async function blockBreak(block, s, last) {
+  async function blockBreak(block, nBlocks, s, last) {
     const breakStart = performance.now();
     const render = (remaining) => showHTML(`
       <div class="box">
-        <p>Block ${block} of ${C.nMainBlocks} finished.</p>
+        <p>Block ${block} of ${nBlocks} finished.</p>
         ${summaryLines(s)}
         <p>${last
           ? 'Press the space bar to continue.'

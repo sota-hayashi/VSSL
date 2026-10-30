@@ -1,4 +1,4 @@
-// 試行列の生成（docs/specs/requirements.md の A・B・E・F・K）．
+// 試行列の生成（docs/specs/requirements.md の A・B・E・F・K・L，docs/specs/markov_stimuli.md）．
 // ブラウザでは window.VSSLSequence，Node では module.exports から使う．
 (function (root) {
   'use strict';
@@ -31,10 +31,29 @@
   // 設計（requirements.md K）．
   // mixed：どのブロックも規則どおりと規則外の遷移を混ぜる（A・E）．
   // alternating：奇数ブロックは random（規則なし），偶数ブロックは regular（規則どおりだけ）．予備実験で使う．
+  // markov：T の向きと T のない試行を状態とするマルコフ過程（requirements.md L，markov_stimuli.md）．
   const DESIGNS = {
     mixed: () => 'mixed',
     alternating: (b) => (b % 2 === 1 ? 'random' : 'regular'),
+    markov: () => 'markov',
   };
+
+  // markov の設計（markov_stimuli.md §3・§5）．状態の番号は STATES の順．
+  const MARKOV = {
+    nBlocks: 6, // C は 6 ブロック分で決めてある
+    trialsPerBlock: 80,
+    STATES: ['HP1', 'HP2', 'LP1', 'LP2', 'N'],
+    counts: [25, 25, 10, 10, 10], // 1 ブロックでの各状態の回数
+    // 実験全体の遷移の回数（行：今，列：次）．最後から最初へ戻る 1 本を含めて 480 本
+    C: [
+      [0, 105, 15, 15, 15],
+      [105, 0, 15, 15, 15],
+      [15, 15, 0, 15, 15],
+      [15, 15, 15, 0, 15],
+      [15, 15, 15, 15, 0],
+    ],
+  };
+  const N_STATE = 4;
 
   const PRACTICE = {
     trials: 20,
@@ -220,12 +239,281 @@
     return { targetPos, items };
   }
 
-  // 本番の試行列．
+  // ---------- markov ----------
+
+  function stateClass(s) {
+    return s < 2 ? 'hp' : s < N_STATE ? 'lp' : 'n';
+  }
+
+  // 遷移のラベル（requirements.md L の 8 通り）．直前の試行の状態で決める．
+  const MARKOV_LABELS = {
+    'hp>hp': 'regular',
+    'lp>hp': 'lpToHp',
+    'n>hp': 'nToHp',
+    'hp>lp': 'hpToLp',
+    'hp>n': 'hpToN',
+    'lp>lp': 'lpToLp',
+    'lp>n': 'lpToN',
+    'n>lp': 'nToLp',
+  };
+
+  function markovLabel(prev, cur) {
+    if (prev === null) return 'first';
+    const label = MARKOV_LABELS[stateClass(prev) + '>' + stateClass(cur)];
+    if (!label) throw new Error('impossible transition');
+    return label;
+  }
+
+  // HP ペア（markov_stimuli.md §4）：4 方向から 2 つを選ぶ 6 通りから 1 つ．HP1・HP2 と LP1・LP2 の対応もランダム．
+  function assignStates(rng) {
+    const pairs = [];
+    for (let i = 0; i < 4; i++) for (let j = i + 1; j < 4; j++) pairs.push([ORIENTATIONS[i], ORIENTATIONS[j]]);
+    const hp = shuffle(rng, pairs[randInt(rng, pairs.length)]);
+    const lp = shuffle(rng, ORIENTATIONS.filter((o) => !hp.includes(o)));
+    const diff = Math.abs(ORIENTATION_ANGLE[hp[0]] - ORIENTATION_ANGLE[hp[1]]);
+    return {
+      orientations: [hp[0], hp[1], lp[0], lp[1], null],
+      hpPair: hp,
+      hpPairType: diff === 180 ? 'opposite' : 'adjacent',
+    };
+  }
+
+  // 各セルの 1 ブロックでの値の範囲：C/6 との差が ±1 以内（markov_stimuli.md §5.2，§6 手順 3）．
+  function cellBounds(c) {
+    if (c === 0) return [0, 0];
+    return [Math.max(0, Math.floor(c / MARKOV.nBlocks) - 1), Math.ceil(c / MARKOV.nBlocks) + 1];
+  }
+
+  // 1 ブロックの遷移回数の行列を探す．行和・列和が決まっていて，各セルは [low, high] の範囲．
+  // 値の候補を乱数の順に試す深さ優先の探索．見つからなければ null．
+  function solveBlockMatrix(rng, rowNeed, colNeed, low, high) {
+    const K = MARKOV.STATES.length;
+    const cells = [];
+    for (let i = 0; i < K; i++) for (let j = 0; j < K; j++) if (i !== j) cells.push([i, j]);
+    const M = [];
+    for (let i = 0; i < K; i++) M.push(new Array(K).fill(0));
+    const rowLeft = rowNeed.slice();
+    const colLeft = colNeed.slice();
+    // まだ決めていないセルの範囲の合計（行ごと・列ごと）
+    const rowMin = new Array(K).fill(0);
+    const rowMax = new Array(K).fill(0);
+    const colMin = new Array(K).fill(0);
+    const colMax = new Array(K).fill(0);
+    for (const [i, j] of cells) {
+      rowMin[i] += low[i][j]; rowMax[i] += high[i][j];
+      colMin[j] += low[i][j]; colMax[j] += high[i][j];
+    }
+    let steps = 0;
+
+    function dfs(k) {
+      if (k === cells.length) return true;
+      if (++steps > 20000) return false;
+      const [i, j] = cells[k];
+      rowMin[i] -= low[i][j]; rowMax[i] -= high[i][j];
+      colMin[j] -= low[i][j]; colMax[j] -= high[i][j];
+      const values = [];
+      for (let v = low[i][j]; v <= high[i][j]; v++) values.push(v);
+      for (const v of shuffle(rng, values)) {
+        const r = rowLeft[i] - v;
+        const c = colLeft[j] - v;
+        if (r < rowMin[i] || r > rowMax[i] || c < colMin[j] || c > colMax[j]) continue;
+        M[i][j] = v;
+        rowLeft[i] = r;
+        colLeft[j] = c;
+        if (dfs(k + 1)) return true;
+        rowLeft[i] += v;
+        colLeft[j] += v;
+      }
+      M[i][j] = 0;
+      rowMin[i] += low[i][j]; rowMax[i] += high[i][j];
+      colMin[j] += low[i][j]; colMax[j] += high[i][j];
+      return false;
+    }
+
+    return dfs(0) ? M : null;
+  }
+
+  // 6 ブロック分の遷移回数の行列（markov_stimuli.md §6 手順 3）．
+  // ブロックを順に解き，残りのブロックで C に届くようにセルの範囲を絞る．最後のブロックは残り全部．
+  function solveMarkovBlocks(rng, starts) {
+    const K = MARKOV.STATES.length;
+    const B = MARKOV.nBlocks;
+    const remaining = MARKOV.C.map((row) => row.slice());
+    const out = [];
+    for (let b = 0; b < B; b++) {
+      const after = B - 1 - b; // このブロックの後に残るブロックの数
+      const low = [];
+      const high = [];
+      for (let i = 0; i < K; i++) {
+        low.push([]); high.push([]);
+        for (let j = 0; j < K; j++) {
+          const [lo, hi] = cellBounds(MARKOV.C[i][j]);
+          low[i].push(Math.max(lo, remaining[i][j] - after * hi));
+          high[i].push(Math.min(hi, remaining[i][j] - after * lo));
+          if (low[i][j] > high[i][j]) return null;
+        }
+      }
+      const colNeed = MARKOV.counts.map((n, j) => n - (j === starts[b] ? 1 : 0) + (j === starts[(b + 1) % B] ? 1 : 0));
+      const M = solveBlockMatrix(rng, MARKOV.counts, colNeed, low, high);
+      if (!M) return null;
+      for (let i = 0; i < K; i++) for (let j = 0; j < K; j++) remaining[i][j] -= M[i][j];
+      out.push(M);
+    }
+    return out;
+  }
+
+  // M の遷移をちょうど一度ずつ通り，start から始まって end で終わる道（Hierholzer 法．出る辺の順はランダム）．
+  function eulerPath(rng, M, start) {
+    const K = M.length;
+    const adj = [];
+    for (let i = 0; i < K; i++) {
+      const list = [];
+      for (let j = 0; j < K; j++) for (let k = 0; k < M[i][j]; k++) list.push(j);
+      adj.push(shuffle(rng, list));
+    }
+    const stack = [start];
+    const path = [];
+    while (stack.length) {
+      const v = stack[stack.length - 1];
+      if (adj[v].length) stack.push(adj[v].pop());
+      else path.push(stack.pop());
+    }
+    return path.reverse();
+  }
+
+  // 状態の列（480）を作る（markov_stimuli.md §6 手順 2〜5）．
+  function markovStates(rng) {
+    const B = MARKOV.nBlocks;
+    const K = MARKOV.STATES.length;
+    for (let attempt = 0; attempt < 1000; attempt++) {
+      const starts = [];
+      for (let b = 0; b < B; b++) starts.push(randInt(rng, K));
+      const Ms = solveMarkovBlocks(rng, starts);
+      if (!Ms) continue;
+      const states = [];
+      for (let b = 0; b < B; b++) {
+        const p = eulerPath(rng, Ms[b], starts[b]);
+        if (p.length !== MARKOV.trialsPerBlock + 1 || p[p.length - 1] !== starts[(b + 1) % B]) {
+          throw new Error('euler path failed');
+        }
+        states.push(...p.slice(0, MARKOV.trialsPerBlock));
+      }
+      return { states, starts, matrices: Ms };
+    }
+    throw new Error('failed to generate markov states');
+  }
+
+  // 状態の列の検証（markov_stimuli.md §8 の 1〜5）．問題がなければ空の配列を返す．
+  function verifyMarkovStates(states) {
+    const K = MARKOV.STATES.length;
+    const B = MARKOV.nBlocks;
+    const T = MARKOV.trialsPerBlock;
+    const errors = [];
+    if (states.length !== B * T) errors.push('length');
+    for (let b = 0; b < B; b++) {
+      const blk = states.slice(b * T, (b + 1) * T);
+      for (let s = 0; s < K; s++) {
+        if (blk.filter((x) => x === s).length !== MARKOV.counts[s]) errors.push(`count b${b + 1} ${MARKOV.STATES[s]}`);
+      }
+      // 各ブロックの遷移（ブロックの最後から次のブロックの最初への 1 本を含む．最後のブロックは最初へ戻る）
+      for (let i = 0; i < K; i++) {
+        for (let j = 0; j < K; j++) {
+          let n = 0;
+          for (let t = b * T; t < (b + 1) * T; t++) {
+            if (states[t] === i && states[(t + 1) % states.length] === j) n++;
+          }
+          const [lo, hi] = cellBounds(MARKOV.C[i][j]);
+          if (n < lo || n > hi) errors.push(`block bounds b${b + 1} ${i}>${j}`);
+        }
+      }
+    }
+    const total = MARKOV.C.map((row) => row.map(() => 0));
+    for (let t = 0; t + 1 < states.length; t++) {
+      if (states[t] === states[t + 1]) errors.push(`repeat at ${t + 1}`);
+      total[states[t]][states[t + 1]]++;
+    }
+    // 実際の遷移は 479 本．C との差は，最後から最初へ戻る 1 本だけ
+    let diff = 0;
+    for (let i = 0; i < K; i++) {
+      for (let j = 0; j < K; j++) {
+        const d = MARKOV.C[i][j] - total[i][j];
+        if (d < 0) errors.push(`total ${i}>${j}`);
+        diff += d;
+      }
+    }
+    if (diff !== 1) errors.push('total diff');
+    return errors;
+  }
+
+  // markov の本番の試行列．nBlocks が 6 より少ないとき（動作確認用）は，6 ブロック分を作って前から使う．
+  function generateMarkov(rng, nBlocks) {
+    const assignment = assignStates(rng);
+    let gen;
+    for (let attempt = 0; ; attempt++) {
+      gen = markovStates(rng);
+      if (verifyMarkovStates(gen.states).length === 0) break;
+      if (attempt >= 10) throw new Error('markov states failed verification');
+    }
+    const T = MARKOV.trialsPerBlock;
+    const blocks = [];
+    let prevState = null;
+    let prevT = null;
+    let prevTargetPos = null;
+    for (let b = 0; b < Math.min(nBlocks, MARKOV.nBlocks); b++) {
+      const trials = [];
+      for (let t = 0; t < T; t++) {
+        const s = gen.states[b * T + t];
+        const present = s !== N_STATE;
+        const orientation = assignment.orientations[s];
+        const display = makeDisplay(rng, present, orientation, prevTargetPos);
+        trials.push({
+          present,
+          orientation,
+          prevOrientation: present ? prevT : null,
+          transition: markovLabel(prevState, s),
+          afterAbsent: prevState === N_STATE,
+          targetPos: display.targetPos,
+          prevTargetPos,
+          items: display.items,
+          state: MARKOV.STATES[s],
+          prevState: prevState === null ? null : MARKOV.STATES[prevState],
+          block: b + 1,
+          blockType: 'markov',
+          trialInBlock: t + 1,
+        });
+        if (present) {
+          prevT = orientation;
+          prevTargetPos = display.targetPos;
+        }
+        prevState = s;
+      }
+      blocks.push({ block: b + 1, blockType: 'markov', trials, edges: null, matrix: gen.matrices[b] });
+    }
+    return {
+      design: 'markov',
+      cycle: null,
+      start: null,
+      hpPair: assignment.hpPair,
+      hpPairType: assignment.hpPairType,
+      stateOrientations: {
+        HP1: assignment.orientations[0],
+        HP2: assignment.orientations[1],
+        LP1: assignment.orientations[2],
+        LP2: assignment.orientations[3],
+      },
+      blockStarts: gen.starts.map((s) => MARKOV.STATES[s]),
+      blocks,
+    };
+  }
+
+  // ---------- 本番の試行列 ----------
+
   function generateMain(rng, opts) {
     const nBlocks = opts.nBlocks;
     const cycleIndex = opts.cycleIndex;
     const design = opts.design || 'mixed';
     if (!DESIGNS[design]) throw new Error('unknown design: ' + design);
+    if (design === 'markov') return generateMarkov(rng, nBlocks);
     const cycle = CYCLES[cycleIndex];
     const successor = successorMap(cycle);
     const nPresent = MAIN.trialsPerBlock - MAIN.absentPerBlock;
@@ -348,6 +636,7 @@
     N_POSITIONS,
     MAIN,
     DESIGNS,
+    MARKOV,
     PRACTICE,
     makeRng,
     shuffle,
@@ -355,6 +644,8 @@
     blockEdges,
     absentSlots,
     lRotations,
+    markovLabel,
+    verifyMarkovStates,
     generateMain,
     generatePractice,
   };

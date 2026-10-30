@@ -7,18 +7,19 @@
   const debug = params.get('debug') === '1';
 
   root.VSSLConfig = {
-    version: '0.3.0',
+    version: '0.4.0',
     debug,
 
     // A．試行数とブロック
     nMainBlocks: debug && params.get('blocks') ? Number(params.get('blocks')) : 6,
-    // K．設計．'alternating'（予備実験：奇数ブロック random，偶数ブロック regular）か 'mixed'（A・E）
-    design: 'alternating',
+    // 設計．'markov'（L．本実験），'alternating'（K．予備実験：奇数ブロック random，偶数ブロック regular），'mixed'（A・E）
+    // markov は 6 ブロックで作る．?blocks=N（N < 6）のときは前の N ブロックだけを行う
+    design: 'markov',
 
     // B．刺激と画面（CSS px）
     radius: 210,
     itemSize: 64,
-    strokeWidth: 8, // 線の太さ．要件定義書に値がないので仮に決めた
+    strokeWidth: 8, // 線の太さ（markov_stimuli.md §7）
     fixationRadius: 8,
     minDisplay: 484, // 表示領域の最小の幅と高さ
     colors: {

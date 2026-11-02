@@ -331,6 +331,7 @@
   // 同意のページ（実験の前．全画面にする前）．同意すれば true，同意しなければ false を返す．
   async function consent() {
     current.phase = 'consent';
+    screenEl.classList.add('consent'); // 同意のページだけ，文章の箱の左右をグレーにする
     const info = {};
     Object.keys(C.consentInfo).forEach((k) => { info[k] = escapeHTML(C.consentInfo[k]); });
     const items = CONSENT_ITEMS.map((it) =>
@@ -368,7 +369,11 @@
            Anonymised data may be published and shared with other researchers.
            This study has been approved by ${info.ethics}.</p>
         <h3>Payment</h3>
-        <p>You will receive ${info.payment}. Payments are made via Prolific.</p>
+        <p>You will receive ${info.payment}. Payments are made via Prolific.
+           Please do the task attentively until the end.
+           If your responses are exceptionally fast and show clear signs of low effort throughout the task
+           (for example, pressing keys without searching for the target),
+           your submission may be rejected and not paid, or you may be asked to return it.</p>
         <h3>Contact</h3>
         <p>If you have any questions, please contact ${info.contact}.</p>
         <h3>Consent</h3>
@@ -391,6 +396,7 @@
       items: choice ? CONSENT_ITEMS.map((it) => it.id) : boxes.filter((b) => b.checked).map((b) => b.value),
     };
     logEvent(choice ? 'consent_agreed' : 'consent_declined');
+    screenEl.classList.remove('consent');
     return choice;
   }
 

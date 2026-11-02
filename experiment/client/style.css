@@ -47,6 +47,20 @@ body.task {
   text-align: left;
 }
 
+/* 同意のページ：文章の箱の左右をグレーにし，箱は画面の高さいっぱいにする */
+#screen.consent {
+  background: rgb(80, 80, 80);
+  align-items: stretch;
+}
+
+#screen.consent .box.wide {
+  background: rgb(30, 30, 30);
+  box-sizing: border-box;
+  height: 100vh;
+  max-height: 100vh;
+  padding: 12px 24px;
+}
+
 .box h1, .box h2 {
   margin-top: 0;
 }
